@@ -1,9 +1,8 @@
-package ru.somsin.disallowtransaction.visitor;
+package ru.somsin.disallowannotation.visitor;
 
 import org.objectweb.asm.*;
 import org.objectweb.asm.commons.Method;
-import ru.somsin.disallowtransaction.annotation.DisallowTransaction;
-import ru.somsin.disallowtransaction.model.MethodData;
+import ru.somsin.disallowannotation.model.MethodData;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -14,24 +13,36 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 
 /**
- * Visitor for disallow transaction
+ * Visitor for disallow annotation
  */
-public class DisallowTransactionVisitor {
+public class DisallowAnnotationVisitor {
     private final String INIT = "<init>";
     private final String CL_INIT = "<clinit>";
     private final String DOT_CLASS = ".class";
 
-    private Class<? extends Annotation> annotationClass;
+    private final Class<? extends Annotation> forbiddenAnnotationClass;
+    private final Class<? extends Annotation> markerAnnotationClass;
     private String targetClass;
     private Method targetMethod;
 
-    private DisallowTransactionClassVisitor classVisitor;
+    private DisallowAnnotationClassVisitor classVisitor;
 
     private final List<Path> pathsToClasses = new ArrayList<>();
     private final Set<Node> roots = new HashSet<>();
     private final Map<java.lang.reflect.Method, Set<Node>> invokeDynamic = new HashMap<>();
 
-    private boolean foundTransactional = false;
+    private boolean foundAnnotation = false;
+
+    /**
+     * Init
+     *
+     * @param markerAnnotationClass    Annotation for marking the root method (example: @DisallowTransactional)
+     * @param forbiddenAnnotationClass Forbidden annotation in the root method call chain (example: org.spring...@Transactional)
+     */
+    public DisallowAnnotationVisitor(Class<? extends Annotation> markerAnnotationClass, Class<? extends Annotation> forbiddenAnnotationClass) {
+        this.markerAnnotationClass = markerAnnotationClass;
+        this.forbiddenAnnotationClass = forbiddenAnnotationClass;
+    }
 
     /**
      * Run a check
@@ -39,9 +50,31 @@ public class DisallowTransactionVisitor {
      * @throws Exception In case of errors
      */
     public void run() throws Exception {
-        definePathsToClasses();
-        determineRoots();
-        determineNodes();
+        try (InputStream input = DisallowAnnotationVisitor.class.getClassLoader().getResourceAsStream("config.properties")) {
+            Properties properties = new Properties();
+            properties.load(input);
+
+            Files.walkFileTree(Paths.get(properties.getProperty("disallow-annotation.build.dir")), new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
+                    String fileName = file.getFileName().toString();
+
+                    if (fileName.endsWith(DOT_CLASS)) {
+                        pathsToClasses.add(file);
+                    }
+
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+
+        }
+
+        classVisitor = new DisallowAnnotationClassVisitor(true);
+        acceptStream(pathsToClasses);
+
+        for (Node root : roots) {
+            determineNodes(root);
+        }
     }
 
     /**
@@ -55,12 +88,12 @@ public class DisallowTransactionVisitor {
 
 
     /**
-     * Transaction indication
+     * Annotation indication
      *
      * @return true if it has
      */
-    public boolean isFoundTransactional() {
-        return foundTransactional;
+    public boolean isFoundAnnotation() {
+        return foundAnnotation;
     }
 
     private static class Node {
@@ -149,8 +182,8 @@ public class DisallowTransactionVisitor {
         return parameters.toArray(new Class[]{});
     }
 
-    private class DisallowTransactionClassVisitor extends ClassVisitor {
-        private final DisallowTransactionMethodVisitor methodVisitor = new DisallowTransactionMethodVisitor();
+    private class DisallowAnnotationClassVisitor extends ClassVisitor {
+        private final DisallowAnnotationMethodVisitor methodVisitor = new DisallowAnnotationMethodVisitor();
 
         private Class<?> clazz;
         private java.lang.reflect.Method method;
@@ -158,13 +191,13 @@ public class DisallowTransactionVisitor {
 
         private final boolean determineRootNodes;
 
-        public DisallowTransactionClassVisitor(boolean determineRootNodes, Node node) {
+        public DisallowAnnotationClassVisitor(boolean determineRootNodes, Node node) {
             super(Opcodes.ASM9);
             this.determineRootNodes = determineRootNodes;
             this.node = node;
         }
 
-        public DisallowTransactionClassVisitor(boolean determineRootNodes) {
+        public DisallowAnnotationClassVisitor(boolean determineRootNodes) {
             super(Opcodes.ASM9);
             this.determineRootNodes = determineRootNodes;
         }
@@ -194,21 +227,21 @@ public class DisallowTransactionVisitor {
                 return methodVisitor;
             }
 
-            boolean hasTransactional = false;
-            boolean hasDisallowTransaction = false;
+            boolean hasForbiddenAnnotation = false;
+            boolean hasMarkerAnnotation = false;
 
             for (Annotation annotation : method.getDeclaredAnnotations()) {
                 Class<? extends Annotation> annotationType = annotation.annotationType();
 
-                if (annotationType.equals(DisallowTransaction.class)) {
-                    hasDisallowTransaction = true;
-                } else if (annotationType.equals(annotationClass)) {
-                    hasTransactional = true;
+                if (annotationType.equals(markerAnnotationClass)) {
+                    hasMarkerAnnotation = true;
+                } else if (annotationType.equals(forbiddenAnnotationClass)) {
+                    hasForbiddenAnnotation = true;
                 }
             }
 
-            if (hasDisallowTransaction) {
-                MethodData methodData = new MethodData(method, hasTransactional);
+            if (hasMarkerAnnotation) {
+                MethodData methodData = new MethodData(method, hasForbiddenAnnotation);
                 Node node = new Node(clazz, methodData);
                 roots.add(node);
             }
@@ -216,8 +249,8 @@ public class DisallowTransactionVisitor {
             return methodVisitor;
         }
 
-        private class DisallowTransactionMethodVisitor extends MethodVisitor {
-            public DisallowTransactionMethodVisitor() {
+        private class DisallowAnnotationMethodVisitor extends MethodVisitor {
+            public DisallowAnnotationMethodVisitor() {
                 super(Opcodes.ASM9);
             }
 
@@ -233,7 +266,7 @@ public class DisallowTransactionVisitor {
                         boolean hasTransactional = false;
 
                         for (Annotation annotation : method.getDeclaredAnnotations()) {
-                            if (annotation.annotationType().equals(annotationClass)) {
+                            if (annotation.annotationType().equals(forbiddenAnnotationClass)) {
                                 hasTransactional = true;
                                 break;
                             }
@@ -255,6 +288,7 @@ public class DisallowTransactionVisitor {
                         } catch (NoSuchMethodException e) {
                             throw new RuntimeException(e);
                         }
+
                         Set<Node> nodes = invokeDynamic.get(invokeMethod);
 
                         if (nodes == null || nodes.size() == 0) {
@@ -277,7 +311,7 @@ public class DisallowTransactionVisitor {
                     boolean hasTransactional = false;
 
                     for (Annotation annotation : method.getDeclaredAnnotations()) {
-                        if (annotation.annotationType().equals(annotationClass)) {
+                        if (annotation.annotationType().equals(forbiddenAnnotationClass)) {
                             hasTransactional = true;
                         }
                     }
@@ -291,38 +325,12 @@ public class DisallowTransactionVisitor {
         }
     }
 
-    private void determineNodes() throws Exception {
-        for (Node root : roots) {
-            determineNodes(root);
-        }
-    }
-
-    private void definePathsToClasses() throws IOException {
-        Files.walkFileTree(Paths.get("build", "classes", "java", "main"), new SimpleFileVisitor<Path>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                String fileName = file.getFileName().toString();
-
-                if (fileName.endsWith(DOT_CLASS)) {
-                    pathsToClasses.add(file);
-                }
-
-                return FileVisitResult.CONTINUE;
-            }
-        });
-    }
-
-    private void determineRoots() throws IOException {
-        classVisitor = new DisallowTransactionClassVisitor(true);
-        acceptStream(pathsToClasses);
-    }
-
     private void determineNodes(Node root) throws Exception {
         determineInnerNodes(root);
 
         for (Node node : root.getNodes()) {
-            if (node.getMethodData().isHasTransactional()) {
-                foundTransactional = true;
+            if (node.getMethodData().isHasForbiddenAnnotation()) {
+                foundAnnotation = true;
             }
 
             determineNodes(node);
@@ -332,7 +340,7 @@ public class DisallowTransactionVisitor {
     private void determineInnerNodes(Node node) throws Exception {
         targetClass = node.getClazz().getName().replace('.', '/');
         targetMethod = Method.getMethod(node.getMethodData().getMethod());
-        classVisitor = new DisallowTransactionClassVisitor(false, node);
+        classVisitor = new DisallowAnnotationClassVisitor(false, node);
 
         acceptStream(pathsToClasses);
 

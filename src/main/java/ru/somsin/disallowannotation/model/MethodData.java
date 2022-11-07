@@ -1,4 +1,4 @@
-package ru.somsin.disallowtransaction.model;
+package ru.somsin.disallowannotation.model;
 
 import java.lang.reflect.Method;
 import java.util.Objects;
@@ -13,13 +13,13 @@ public class MethodData {
     private Method method;
 
     /**
-     * Transaction indication
+     * Forbidden annotation indication
      */
-    private boolean hasTransactional;
+    private boolean hasForbiddenAnnotation;
 
-    public MethodData(Method method, boolean hasTransactional) {
+    public MethodData(Method method, boolean hasForbiddenAnnotation) {
         this.method = method;
-        this.hasTransactional = hasTransactional;
+        this.hasForbiddenAnnotation = hasForbiddenAnnotation;
     }
 
     public Method getMethod() {
@@ -30,12 +30,12 @@ public class MethodData {
         this.method = method;
     }
 
-    public boolean isHasTransactional() {
-        return hasTransactional;
+    public boolean isHasForbiddenAnnotation() {
+        return hasForbiddenAnnotation;
     }
 
-    public void setHasTransactional(boolean hasTransactional) {
-        this.hasTransactional = hasTransactional;
+    public void setHasForbiddenAnnotation(boolean hasForbiddenAnnotation) {
+        this.hasForbiddenAnnotation = hasForbiddenAnnotation;
     }
 
     @Override
