@@ -1,0 +1,3 @@
+disallow-annotation:
+  build:
+    dir: target\\classes

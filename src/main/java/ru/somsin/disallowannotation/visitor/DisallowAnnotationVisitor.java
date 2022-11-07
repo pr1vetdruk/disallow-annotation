@@ -2,6 +2,7 @@ package ru.somsin.disallowannotation.visitor;
 
 import org.objectweb.asm.*;
 import org.objectweb.asm.commons.Method;
+import org.yaml.snakeyaml.Yaml;
 import ru.somsin.disallowannotation.model.MethodData;
 
 import java.io.BufferedInputStream;
@@ -22,6 +23,7 @@ public class DisallowAnnotationVisitor {
 
     private final Class<? extends Annotation> forbiddenAnnotationClass;
     private final Class<? extends Annotation> markerAnnotationClass;
+
     private String targetClass;
     private Method targetMethod;
 
@@ -31,7 +33,7 @@ public class DisallowAnnotationVisitor {
     private final Set<Node> roots = new HashSet<>();
     private final Map<java.lang.reflect.Method, Set<Node>> invokeDynamic = new HashMap<>();
 
-    private boolean foundAnnotation = false;
+    private boolean foundForbiddenAnnotation = false;
 
     /**
      * Init
@@ -50,11 +52,11 @@ public class DisallowAnnotationVisitor {
      * @throws Exception In case of errors
      */
     public void run() throws Exception {
-        try (InputStream input = DisallowAnnotationVisitor.class.getClassLoader().getResourceAsStream("config.properties")) {
-            Properties properties = new Properties();
-            properties.load(input);
+        try (InputStream input = DisallowAnnotationVisitor.class.getClassLoader().getResourceAsStream("application.yaml")) {
+            Map<String, Map<String, Map<String, String>>> properties = new Yaml().load(input);
+            String buildDir = properties.get("disallow-annotation").get("build").get("dir");
 
-            Files.walkFileTree(Paths.get(properties.getProperty("disallow-annotation.build.dir")), new SimpleFileVisitor<Path>() {
+            Files.walkFileTree(Paths.get(buildDir), new SimpleFileVisitor<Path>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
                     String fileName = file.getFileName().toString();
@@ -66,11 +68,11 @@ public class DisallowAnnotationVisitor {
                     return FileVisitResult.CONTINUE;
                 }
             });
-
         }
 
         classVisitor = new DisallowAnnotationClassVisitor(true);
         acceptStream(pathsToClasses);
+        classVisitor.determineRootNodes = false;
 
         for (Node root : roots) {
             determineNodes(root);
@@ -86,14 +88,13 @@ public class DisallowAnnotationVisitor {
         return roots;
     }
 
-
     /**
-     * Annotation indication
+     * Forbidden annotation indication
      *
      * @return true if it has
      */
-    public boolean isFoundAnnotation() {
-        return foundAnnotation;
+    public boolean isFoundForbiddenAnnotation() {
+        return foundForbiddenAnnotation;
     }
 
     private static class Node {
@@ -189,13 +190,7 @@ public class DisallowAnnotationVisitor {
         private java.lang.reflect.Method method;
         private Node node;
 
-        private final boolean determineRootNodes;
-
-        public DisallowAnnotationClassVisitor(boolean determineRootNodes, Node node) {
-            super(Opcodes.ASM9);
-            this.determineRootNodes = determineRootNodes;
-            this.node = node;
-        }
+        private boolean determineRootNodes;
 
         public DisallowAnnotationClassVisitor(boolean determineRootNodes) {
             super(Opcodes.ASM9);
@@ -305,9 +300,7 @@ public class DisallowAnnotationVisitor {
 
             @Override
             public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
-                if (owner.equals(targetClass)
-                        && name.equals(targetMethod.getName())
-                        && descriptor.equals(targetMethod.getDescriptor())) {
+                if (owner.equals(targetClass) && name.equals(targetMethod.getName()) && descriptor.equals(targetMethod.getDescriptor())) {
                     boolean hasTransactional = false;
 
                     for (Annotation annotation : method.getDeclaredAnnotations()) {
@@ -330,7 +323,7 @@ public class DisallowAnnotationVisitor {
 
         for (Node node : root.getNodes()) {
             if (node.getMethodData().isHasForbiddenAnnotation()) {
-                foundAnnotation = true;
+                foundForbiddenAnnotation = true;
             }
 
             determineNodes(node);
@@ -340,7 +333,7 @@ public class DisallowAnnotationVisitor {
     private void determineInnerNodes(Node node) throws Exception {
         targetClass = node.getClazz().getName().replace('.', '/');
         targetMethod = Method.getMethod(node.getMethodData().getMethod());
-        classVisitor = new DisallowAnnotationClassVisitor(false, node);
+        classVisitor.node = node;
 
         acceptStream(pathsToClasses);
 
